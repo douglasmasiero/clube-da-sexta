@@ -536,11 +536,11 @@ function setStatus(t){ document.getElementById('status').textContent = t; }
 const SUPABASE_URL = 'https://kxkibtgeoqykdzwhudhp.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4a2lidGdlb3F5a2R6d2h1ZGhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU1NDE2MDQsImV4cCI6MjEwMTExNzYwNH0.WZw5AhsOQwvMDgF-l4b-yfFxNy5yqGxNULGHyb8n-Pw';
 
-let supabase = null;
+let supabaseClient = null;
 let supabaseOk = false;
 try{
   if(SUPABASE_URL.startsWith('http') && SUPABASE_ANON_KEY.length > 10){
-    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     supabaseOk = true;
   }
 }catch(e){
@@ -563,14 +563,14 @@ try{
 // { value: '<json string>' } que o resto do app já espera.
 async function storageGet(key){
   if(!supabaseOk) throw new Error('Supabase não configurado');
-  const { data, error } = await supabase.from('app_data').select('value').eq('key', key).maybeSingle();
+  const { data, error } = await supabaseClient.from('app_data').select('value').eq('key', key).maybeSingle();
   if(error) throw error;
   if(!data) throw new Error('chave não encontrada');
   return { key, value: JSON.stringify(data.value) };
 }
 async function storageSet(key, value){
   if(!supabaseOk) throw new Error('Supabase não configurado');
-  const { error } = await supabase.from('app_data').upsert({ key, value: JSON.parse(value), updated_at: new Date().toISOString() });
+  const { error } = await supabaseClient.from('app_data').upsert({ key, value: JSON.parse(value), updated_at: new Date().toISOString() });
   if(error) throw error;
   return { key, value };
 }
@@ -1276,7 +1276,7 @@ window.removerJogo = async function(id){
   render();
   await save();
   if(g && supabaseOk){
-    try{ await supabase.from('game_participants').delete().eq('game_id', g.id); }catch(e){}
+    try{ await supabaseClient.from('game_participants').delete().eq('game_id', g.id); }catch(e){}
   }
 }
 
@@ -1402,10 +1402,10 @@ async function sincronizarParticipantesSupabase(g){
   if(!supabaseOk) return;
   try{
     const idsAtuais = new Set(g.attendees.map(a=>a.memberId));
-    const { data: existentes } = await supabase.from('game_participants').select('member_id').eq('game_id', g.id);
+    const { data: existentes } = await supabaseClient.from('game_participants').select('member_id').eq('game_id', g.id);
     const idsRemover = (existentes||[]).map(r=>r.member_id).filter(id=>!idsAtuais.has(id));
     if(idsRemover.length){
-      await supabase.from('game_participants').delete().eq('game_id', g.id).in('member_id', idsRemover);
+      await supabaseClient.from('game_participants').delete().eq('game_id', g.id).in('member_id', idsRemover);
     }
     if(g.attendees.length){
       const rows = g.attendees.map(a=>({
@@ -1420,7 +1420,7 @@ async function sincronizarParticipantesSupabase(g){
         gk_for_game: !!a.gkForGame,
         updated_at: new Date().toISOString()
       }));
-      await supabase.from('game_participants').upsert(rows, { onConflict: 'game_id,member_id' });
+      await supabaseClient.from('game_participants').upsert(rows, { onConflict: 'game_id,member_id' });
     }
   }catch(e){
     console.warn('Falha ao sincronizar participantes no Supabase:', e);
@@ -1589,7 +1589,7 @@ async function checkAuthSetup(){
   }
 
   try{
-    const { data } = await supabase.auth.getSession();
+    const { data } = await supabaseClient.auth.getSession();
     if(data && data.session){
       const user = data.session.user;
       currentUser = (user.user_metadata && user.user_metadata.nome) || user.email;
@@ -1614,7 +1614,7 @@ window.criarAcesso = async function(){
   if(s1.length < 6){ erro.textContent = 'Use pelo menos 6 caracteres na senha.'; return; }
   if(s1 !== s2){ erro.textContent = 'As senhas não são iguais.'; return; }
   try{
-    const { data, error } = await supabase.auth.signUp({
+    const { data, error } = await supabaseClient.auth.signUp({
       email, password: s1,
       options: { data: { nome } }
     });
@@ -1641,7 +1641,7 @@ window.fazerLogin = async function(){
   if(!email){ erro.textContent = 'Digite seu e-mail.'; return; }
   if(!senha){ erro.textContent = 'Digite a senha.'; return; }
   try{
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password: senha });
+    const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password: senha });
     if(error){ erro.textContent = error.message; return; }
     currentUser = (data.user.user_metadata && data.user.user_metadata.nome) || data.user.email;
     currentUserEmail = data.user.email;
@@ -1679,7 +1679,7 @@ window.pularSaldoInicial = async function(){
   await save();
 }
 window.sair = async function(){
-  try{ await supabase.auth.signOut(); }catch(e){}
+  try{ await supabaseClient.auth.signOut(); }catch(e){}
   currentUser = '';
   currentUserEmail = '';
   document.getElementById('login-email').value = '';
@@ -1708,4 +1708,4 @@ document.querySelectorAll('nav button').forEach(btn=>{
 checkAuthSetup();
 </script>
 </body>
-</html> 
+</html>
