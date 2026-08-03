@@ -823,7 +823,11 @@ function renderJogos(){
 
     // ---- Passo 2: lista de participantes confirmados ----
     const participantes = [...g.attendees].sort((a,b)=> a.nome.localeCompare(b.nome, 'pt-BR'));
-    const pagantes = participantes.filter(a=>!a.gkForGame);
+    const pagantes = participantes.filter(a=>{
+      if(a.gkForGame) return false;
+      const m = state.members.find(m=>m.id===a.memberId);
+      return !m || m.type!=='mensalista';
+    });
     const totalArrecadado = participantes.reduce((acc,a)=> acc + (a.paid ? (a.valorPago!=null ? a.valorPago : FEES.jogo) : 0), 0);
     const totalPendente = pagantes.filter(a=>!a.paid).length * FEES.jogo;
     const qtdJogadores = participantes.length;
@@ -880,6 +884,11 @@ function renderJogos(){
             </div>
             ${a.gkForGame ? `
             <div class="muted" style="margin-top:6px;">goleiro não paga</div>
+            ` : tipo==='mensalista' ? `
+            <div class="muted" style="margin-top:6px;">mensalista não paga jogo avulso</div>
+            <div class="row" style="margin-top:8px;">
+              <input type="text" placeholder="Observação (opcional)" value="${(a.observacao||'').replace(/"/g,'&quot;')}" onchange="atualizarObservacaoParticipante('${g.id}','${a.memberId}', this.value)">
+            </div>
             ` : `
             <div style="display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap;">
               <button class="action small ${a.paid ? '' : 'ghost'}" style="${a.paid ? 'background:#7BC67E; color:var(--ink);' : ''}" onclick="marcarPagamento('${g.id}','${a.memberId}', ${!a.paid})">${a.paid ? `✓ R$15 pago` : `Marcar pago (R$${FEES.jogo})`}</button>
