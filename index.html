@@ -769,14 +769,16 @@ function renderJogos(){
     const devendo = g.attendees.filter(a=> !a.gkForGame && !a.paid).length + convidados.filter(c=>!c.gk && !c.paid).length;
     const pagamentosLabel = !g.presencaConfirmada ? 'presença não confirmada' : (devendo>0 ? `${devendo} pendente${devendo===1?'':'s'}` : 'pagamentos em dia');
     const aberto = expandedGames.has(g.id);
+    const corPendencia = !g.presencaConfirmada ? 'var(--gold)' : (devendo>0 ? 'var(--red)' : '#7BC67E');
+    const fundoPendencia = !g.presencaConfirmada ? 'rgba(242,169,59,0.08)' : (devendo>0 ? 'rgba(214,69,69,0.10)' : 'rgba(123,198,126,0.08)');
 
     if(!aberto){
       return `
-      <div class="card game-collapsed" onclick="toggleExpandJogo('${g.id}')" style="cursor:pointer;">
+      <div class="card game-collapsed" onclick="toggleExpandJogo('${g.id}')" style="cursor:pointer; border-color:${corPendencia}; background:${fundoPendencia};">
         <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
           <div>
             <div style="font-family:'Bebas Neue',sans-serif; font-size:20px; letter-spacing:0.5px;">${dataFmt}</div>
-            <div class="muted" style="margin-top:4px;">${g.presencaConfirmada ? `linha ${linhaPresentes}/${CAPACIDADE_LINHA}${convidados.length ? ` (${convidados.length} convidado${convidados.length===1?'':'s'})` : ''} · goleiros ${goleirosPresentes} · ` : ''}${pagamentosLabel}</div>
+            <div class="muted" style="margin-top:4px; color:${corPendencia};">${g.presencaConfirmada ? `linha ${linhaPresentes}/${CAPACIDADE_LINHA}${convidados.length ? ` (${convidados.length} convidado${convidados.length===1?'':'s'})` : ''} · goleiros ${goleirosPresentes} · ` : ''}${pagamentosLabel}</div>
           </div>
           <button class="action small ghost" onclick="event.stopPropagation(); editarJogo('${g.id}')">Editar</button>
         </div>
@@ -880,8 +882,7 @@ function renderJogos(){
             <div class="muted" style="margin-top:6px;">goleiro não paga</div>
             ` : `
             <div style="display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap;">
-              <button class="action small ${a.paid ? '' : 'ghost'}" style="${a.paid ? 'background:#7BC67E; color:var(--ink);' : ''}" onclick="marcarPagamento('${g.id}','${a.memberId}', ${!a.paid})">${a.paid ? '✓ Pago' : 'Não pago'}</button>
-              <input type="number" step="0.01" placeholder="Valor pago" value="${a.valorPago!=null ? a.valorPago : ''}" style="max-width:120px;" onchange="atualizarValorPago('${g.id}','${a.memberId}', this.value)">
+              <button class="action small ${a.paid ? '' : 'ghost'}" style="${a.paid ? 'background:#7BC67E; color:var(--ink);' : ''}" onclick="marcarPagamento('${g.id}','${a.memberId}', ${!a.paid})">${a.paid ? `✓ R$15 pago` : `Marcar pago (R$${FEES.jogo})`}</button>
               ${dataPagFmt ? `<span class="muted">pago em ${dataPagFmt}</span>` : ''}
               <button class="action small ghost" onclick="anexarComprovante('jogo','${proofKey}')">📎 ${proof ? 'Trocar comprovante' : 'Anexar comprovante'}</button>
               ${proof ? `
@@ -1379,20 +1380,13 @@ window.marcarPagamento = function(gameId, memberId, pago){
   if(!a) return;
   a.paid = pago;
   if(pago){
-    if(a.valorPago==null) a.valorPago = FEES.jogo;
+    a.valorPago = FEES.jogo;
     a.dataPagamento = new Date().toISOString();
   } else {
+    a.valorPago = null;
     a.dataPagamento = null;
   }
   render();
-}
-window.atualizarValorPago = function(gameId, memberId, valor){
-  const g = state.games.find(g=>g.id===gameId);
-  if(!g) return;
-  const a = g.attendees.find(a=>a.memberId===memberId);
-  if(!a) return;
-  const v = parseFloat(valor);
-  a.valorPago = isNaN(v) ? null : v;
 }
 window.atualizarObservacaoParticipante = function(gameId, memberId, texto){
   const g = state.games.find(g=>g.id===gameId);
