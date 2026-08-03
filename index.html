@@ -420,6 +420,13 @@
     </div>
     <div class="card">
       <h2>Pendências <small>quem ainda deve</small></h2>
+      <div class="row" style="margin-bottom:10px;">
+        <select id="filtro-pendencias" onchange="filtrarPendencias(this.value)">
+          <option value="todas">Todas as pendências</option>
+          <option value="mensalidade">Só mensalidades</option>
+          <option value="jogo">Só jogos</option>
+        </select>
+      </div>
       <div id="pendencias-tabela"></div>
     </div>
     <div class="card">
@@ -514,6 +521,7 @@ let expandedGames = new Set();
 let comprovanteTarget = null;
 let historicoExpandido = false;
 let despesasExpandido = false;
+let filtroPendencias = 'todas';
 let confirmSelected = {};
 let confirmSearch = {};
 let editingParticipants = {};
@@ -638,6 +646,7 @@ async function save(){
 
 // ---------- Cálculos ----------
 const OPERACAO_INICIO_DATA = '2026-07-31';
+const MENSALIDADE_MES_MINIMO = '2026-08';
 const DESPESA_MIN_DATA = '2026-08-01';
 
 function allMonthKeys(){
@@ -675,9 +684,11 @@ function computeMonth(mk){
 function countPendencias(){
   let n = 0;
   const mk = todayMonthKey();
-  state.members.forEach(m=>{
-    if(!state.monthlyFees[mk+'|'+m.id]) n++;
-  });
+  if(mk >= MENSALIDADE_MES_MINIMO){
+    state.members.forEach(m=>{
+      if(!state.monthlyFees[mk+'|'+m.id]) n++;
+    });
+  }
   state.games.forEach(g=>{
     g.attendees.forEach(a=>{
       const member = state.members.find(m=>m.id===a.memberId);
@@ -991,6 +1002,10 @@ window.toggleDespesas = function(){
   despesasExpandido = !despesasExpandido;
   renderDespesas();
 }
+window.filtrarPendencias = function(valor){
+  filtroPendencias = valor;
+  renderPendencias();
+}
 
 function renderFechamento(){
   const input = document.getElementById('mes-fechamento');
@@ -1145,9 +1160,9 @@ function renderPendencias(){
   const linhas = [];
 
   state.members.forEach(m=>{
-    allMonthKeys().filter(mk => mk <= hoje).forEach(mk=>{
+    allMonthKeys().filter(mk => mk <= hoje && mk >= MENSALIDADE_MES_MINIMO).forEach(mk=>{
       if(!state.monthlyFees[mk+'|'+m.id]){
-        linhas.push({ nome: m.name, desc: `mensalidade ${monthLabel(mk)}`, valor: FEES[m.type], data: mk+'-01' });
+        linhas.push({ nome: m.name, desc: `mensalidade ${monthLabel(mk)}`, valor: FEES[m.type], data: mk+'-01', tipo: 'mensalidade' });
       }
     });
   });
@@ -1157,25 +1172,27 @@ function renderPendencias(){
       const m = state.members.find(m=>m.id===a.memberId);
       if(m && m.type==='integrante' && !a.gkForGame && !a.paid){
         const dataFmt = new Date(g.date+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit', month:'2-digit'});
-        linhas.push({ nome: a.nome || m.name, desc: `jogo ${dataFmt}`, valor: FEES.jogo, data: g.date });
+        linhas.push({ nome: a.nome || m.name, desc: `jogo ${dataFmt}`, valor: FEES.jogo, data: g.date, tipo: 'jogo' });
       }
     });
     (g.convidados||[]).forEach(c=>{
       if(!c.gk && !c.paid){
         const dataFmt = new Date(g.date+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit', month:'2-digit'});
-        linhas.push({ nome: `${c.nome} (convidado)`, desc: `jogo ${dataFmt}`, valor: FEES.jogo, data: g.date });
+        linhas.push({ nome: `${c.nome} (convidado)`, desc: `jogo ${dataFmt}`, valor: FEES.jogo, data: g.date, tipo: 'jogo' });
       }
     });
   });
 
-  if(linhas.length===0){
-    el.innerHTML = '<div class="empty"><strong>Tudo em dia</strong>Nenhuma pendência de pagamento no momento.</div>';
+  const linhasFiltradas = filtroPendencias==='todas' ? linhas : linhas.filter(l=>l.tipo===filtroPendencias);
+
+  if(linhasFiltradas.length===0){
+    el.innerHTML = `<div class="empty"><strong>Tudo em dia</strong>${filtroPendencias==='todas' ? 'Nenhuma pendência de pagamento no momento.' : 'Nenhuma pendência desse tipo no momento.'}</div>`;
     return;
   }
 
-  linhas.sort((a,b) => a.nome.localeCompare(b.nome) || a.data.localeCompare(b.data));
-  const total = linhas.reduce((acc,l)=>acc+l.valor, 0);
-  const corpo = linhas.map(l=>`
+  linhasFiltradas.sort((a,b) => a.nome.localeCompare(b.nome) || a.data.localeCompare(b.data));
+  const total = linhasFiltradas.reduce((acc,l)=>acc+l.valor, 0);
+  const corpo = linhasFiltradas.map(l=>`
     <tr>
       <td>${l.nome}</td>
       <td>${l.desc}</td>
