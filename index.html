@@ -414,7 +414,7 @@
     <div class="card">
       <h2>Histórico mensal <small>receita − despesa = saldo do mês</small></h2>
       <div class="row" style="margin-bottom:10px;">
-        <button class="action small ghost" id="btn-saldo-inicial" onclick="editarSaldoInicial()">Ajustar saldo inicial</button>
+        <span class="tag" id="btn-saldo-inicial" style="background:rgba(242,169,59,0.14); color:var(--gold); border:1px solid var(--gold);">saldo inicial travado</span>
       </div>
       <div id="resumo-tabela"></div>
     </div>
@@ -461,7 +461,7 @@
     <div class="card">
       <h2>Registrar jogo de sexta</h2>
       <div class="row">
-        <input type="date" id="novo-jogo-data">
+        <input type="date" id="novo-jogo-data" min="2026-07-31" max="2026-07-31" value="2026-07-31">
         <button class="action" id="btn-add-jogo">+ Novo jogo</button>
       </div>
       <p class="muted">Cadastre os membros antes de criar jogos.</p>
@@ -474,7 +474,7 @@
     <div class="card">
       <h2>Nova despesa <small>bola, uniforme, colete…</small></h2>
       <div class="row">
-        <input type="date" id="nova-despesa-data">
+        <input type="date" id="nova-despesa-data" min="2026-08-01">
         <input type="text" id="nova-despesa-desc" placeholder="Descrição (ex: 2 bolas novas)">
         <input type="number" step="0.01" id="nova-despesa-valor" placeholder="Valor">
         <button class="action" id="btn-add-despesa">+ Registrar</button>
@@ -491,7 +491,7 @@
     <div class="card">
       <h2>Mês de referência</h2>
       <div class="row">
-        <input type="month" id="mes-fechamento">
+        <input type="month" id="mes-fechamento" min="2026-08">
         <button class="action ghost" id="btn-add-mes">Rastrear este mês</button>
       </div>
     </div>
@@ -513,6 +513,11 @@ let loaded = false;
 let expandedGames = new Set();
 let comprovanteTarget = null;
 let historicoExpandido = false;
+let despesasExpandido = false;
+let confirmSelected = {};
+let confirmSearch = {};
+let editingParticipants = {};
+let addParticipantSearch = {};
 
 function uid(){ return Math.random().toString(36).slice(2,10); }
 function todayMonthKey(d=new Date()){ return d.toISOString().slice(0,7); }
@@ -577,9 +582,27 @@ async function load(){
       const parsed = JSON.parse(res.value);
       state = Object.assign({ members:[], games:[], monthlyFees:{}, monthlyExpenses:{}, extraExpenses:[], monthlyProofs:{}, gameProofs:{}, activityLog:[], saldoInicial:0, saldoInicialDefinido:false }, parsed);
       state.members = state.members.map(m => Object.assign({ goalkeeper:false }, m));
-      state.games = state.games.map(g => Object.assign({ convidados:[] }, g, {
-        attendees: g.attendees.map(a => Object.assign({ gkForGame:false }, a))
-      }));
+      state.games = state.games.map(g => {
+        const base = Object.assign({ convidados:[], presencaConfirmada: undefined }, g);
+        const attendeesFixos = (g.attendees||[]).map(a => Object.assign({
+          gkForGame:false, valorPago:null, dataPagamento:null, observacao:'', nome:''
+        }, a));
+        if(base.presencaConfirmada === undefined){
+          // jogo criado antes dessa atualização: trata como já confirmado,
+          // usando quem já estava marcado como presente
+          base.presencaConfirmada = true;
+          base.attendees = attendeesFixos.filter(a=>a.present);
+        } else {
+          base.attendees = attendeesFixos;
+        }
+        base.attendees.forEach(a=>{
+          if(!a.nome){
+            const m = state.members.find(m=>m.id===a.memberId);
+            a.nome = m ? m.name : '(removido)';
+          }
+        });
+        return base;
+      });
     }
     setStatus('sincronizado');
   }catch(e){
@@ -614,6 +637,9 @@ async function save(){
 }
 
 // ---------- Cálculos ----------
+const JOGO_UNICO_DATA = '2026-07-31';
+const DESPESA_MIN_DATA = '2026-08-01';
+
 function allMonthKeys(){
   const set = new Set(Object.keys(state.monthlyExpenses));
   state.games.forEach(g => set.add(g.monthKey));
@@ -633,7 +659,7 @@ function computeMonth(mk){
   state.games.filter(g=>g.monthKey===mk).forEach(g=>{
     g.attendees.forEach(a=>{
       const member = state.members.find(m=>m.id===a.memberId);
-      if(member && member.type==='integrante' && !a.gkForGame && a.present && a.paid) receitaJogos += FEES.jogo;
+      if(member && member.type==='integrante' && !a.gkForGame && a.paid) receitaJogos += (a.valorPago!=null ? a.valorPago : FEES.jogo);
     });
     (g.convidados||[]).forEach(c=>{
       if(!c.gk && c.paid) receitaJogos += FEES.jogo;
@@ -655,7 +681,7 @@ function countPendencias(){
   state.games.forEach(g=>{
     g.attendees.forEach(a=>{
       const member = state.members.find(m=>m.id===a.memberId);
-      if(member && member.type==='integrante' && !a.gkForGame && a.present && !a.paid) n++;
+      if(member && member.type==='integrante' && !a.gkForGame && !a.paid) n++;
     });
     (g.convidados||[]).forEach(c=>{
       if(!c.gk && !c.paid) n++;
@@ -692,7 +718,11 @@ function renderMembros(){
     ul.innerHTML = '<div class="empty"><strong>Sem membros ainda</strong>Adicione os amigos que jogam toda sexta.</div>';
     return;
   }
-  ul.innerHTML = state.members.map(m=>`
+  const ordenados = [...state.members].sort((a,b)=>{
+    if(a.type !== b.type) return a.type==='mensalista' ? -1 : 1;
+    return a.name.localeCompare(b.name, 'pt-BR');
+  });
+  ul.innerHTML = ordenados.map(m=>`
     <li>
       <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
         <span>${m.name}</span>
@@ -721,15 +751,12 @@ function renderJogos(){
   const ordenados = [...state.games].sort((a,b)=> b.date.localeCompare(a.date));
   el.innerHTML = ordenados.map(g=>{
     const convidados = g.convidados || [];
-    const linhaPresentes = g.attendees.filter(a=> a.present && !a.gkForGame).length + convidados.filter(c=>!c.gk).length;
-    const goleirosPresentes = g.attendees.filter(a=> a.present && a.gkForGame).length + convidados.filter(c=>c.gk).length;
+    const linhaPresentes = g.attendees.filter(a=> !a.gkForGame).length + convidados.filter(c=>!c.gk).length;
+    const goleirosPresentes = g.attendees.filter(a=> a.gkForGame).length + convidados.filter(c=>c.gk).length;
     const cheio = linhaPresentes >= CAPACIDADE_LINHA;
     const dataFmt = new Date(g.date+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'long', day:'2-digit', month:'2-digit', year:'numeric'});
-    const devendo = g.attendees.filter(a=>{
-      const m = state.members.find(m=>m.id===a.memberId);
-      return m && m.type==='integrante' && !a.gkForGame && a.present && !a.paid;
-    }).length + convidados.filter(c=>!c.gk && !c.paid).length;
-    const pagamentosLabel = devendo>0 ? `${devendo} pendente${devendo===1?'':'s'}` : 'pagamentos em dia';
+    const devendo = g.attendees.filter(a=> !a.gkForGame && !a.paid).length + convidados.filter(c=>!c.gk && !c.paid).length;
+    const pagamentosLabel = !g.presencaConfirmada ? 'presença não confirmada' : (devendo>0 ? `${devendo} pendente${devendo===1?'':'s'}` : 'pagamentos em dia');
     const aberto = expandedGames.has(g.id);
 
     if(!aberto){
@@ -738,7 +765,7 @@ function renderJogos(){
         <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
           <div>
             <div style="font-family:'Bebas Neue',sans-serif; font-size:20px; letter-spacing:0.5px;">${dataFmt}</div>
-            <div class="muted" style="margin-top:4px;">linha ${linhaPresentes}/${CAPACIDADE_LINHA}${convidados.length ? ` (${convidados.length} convidado${convidados.length===1?'':'s'})` : ''} · goleiros ${goleirosPresentes} · ${pagamentosLabel}</div>
+            <div class="muted" style="margin-top:4px;">${g.presencaConfirmada ? `linha ${linhaPresentes}/${CAPACIDADE_LINHA}${convidados.length ? ` (${convidados.length} convidado${convidados.length===1?'':'s'})` : ''} · goleiros ${goleirosPresentes} · ` : ''}${pagamentosLabel}</div>
           </div>
           <button class="action small ghost" onclick="event.stopPropagation(); editarJogo('${g.id}')">Editar</button>
         </div>
@@ -746,6 +773,54 @@ function renderJogos(){
       </div>
       `;
     }
+
+    // ---- Passo 1: confirmação de presença (ainda não confirmada) ----
+    if(!g.presencaConfirmada){
+      const busca = (confirmSearch[g.id] || '').trim().toLowerCase();
+      const selecionados = confirmSelected[g.id] || new Set();
+      const membrosOrdenados = [...state.members]
+        .filter(m => !busca || m.name.toLowerCase().includes(busca))
+        .sort((a,b)=> a.name.localeCompare(b.name, 'pt-BR'));
+      return `
+      <div class="card">
+        <h2>${dataFmt}
+          <button class="action small danger" onclick="removerJogo('${g.id}')">Excluir jogo</button>
+        </h2>
+        <p class="muted">Confirmação de presença — marque quem vai jogar e toque em Confirmar.</p>
+        <div class="row">
+          <input type="text" placeholder="Buscar jogador…" value="${busca}" oninput="filtrarConfirmacao('${g.id}', this.value)">
+        </div>
+        <ul class="list">
+          ${membrosOrdenados.map(m=>`
+            <li>
+              <label class="check" style="width:100%;">
+                <input type="checkbox" ${selecionados.has(m.id)?'checked':''} onchange="toggleSelecaoConfirmacao('${g.id}','${m.id}', this.checked)">
+                ${m.name}
+              </label>
+              <span class="tag ${m.type}">${m.type}</span>
+            </li>
+          `).join('')}
+        </ul>
+        <div class="row" style="margin-top:14px;">
+          <button class="action" onclick="confirmarPresenca('${g.id}')">✅ Confirmar Presença (${selecionados.size})</button>
+        </div>
+      </div>
+      `;
+    }
+
+    // ---- Passo 2: lista de participantes confirmados ----
+    const participantes = [...g.attendees].sort((a,b)=> a.nome.localeCompare(b.nome, 'pt-BR'));
+    const pagantes = participantes.filter(a=>!a.gkForGame);
+    const totalArrecadado = participantes.reduce((acc,a)=> acc + (a.paid ? (a.valorPago!=null ? a.valorPago : FEES.jogo) : 0), 0);
+    const totalPendente = pagantes.filter(a=>!a.paid).length * FEES.jogo;
+    const qtdJogadores = participantes.length;
+    const qtdPendentes = pagantes.filter(a=>!a.paid).length;
+    const editando = !!editingParticipants[g.id];
+    const buscaAdd = (addParticipantSearch[g.id] || '').trim().toLowerCase();
+    const idsNaLista = new Set(participantes.map(a=>a.memberId));
+    const candidatosAdicionar = [...state.members]
+      .filter(m => !idsNaLista.has(m.id) && (!buscaAdd || m.name.toLowerCase().includes(buscaAdd)))
+      .sort((a,b)=> a.name.localeCompare(b.name, 'pt-BR'));
 
     return `
     <div class="card">
@@ -758,44 +833,82 @@ function renderJogos(){
         </span>
         <span class="tag goleiro">goleiros: ${goleirosPresentes}</span>
       </div>
+
+      <div class="row" style="margin-bottom:6px;">
+        <span class="tag" style="background:rgba(123,198,126,0.15); color:#7BC67E; border:1px solid #7BC67E;">arrecadado: ${fmtMoney(totalArrecadado)}</span>
+        <span class="tag" style="background:rgba(214,69,69,0.15); color:var(--red); border:1px solid var(--red);">pendente: ${fmtMoney(totalPendente)}</span>
+        <span class="tag goleiro">jogadores: ${qtdJogadores}</span>
+        <span class="tag goleiro">pendentes: ${qtdPendentes}</span>
+      </div>
+
+      <div class="row" style="margin:10px 0;">
+        <span class="muted" style="flex:none;">Lista de participantes</span>
+        <button class="action small ${editando ? '' : 'ghost'}" style="${editando ? 'background:var(--gold); color:var(--ink);' : ''}" onclick="toggleEditarParticipantes('${g.id}')">${editando ? '✓ Editando participantes' : 'Editar participantes'}</button>
+      </div>
+
       <ul class="list">
-        ${state.members.map(m=>{
-          const att = g.attendees.find(a=>a.memberId===m.id) || {present:false, paid:false, gkForGame:!!m.goalkeeper};
+        ${participantes.map(a=>{
+          const m = state.members.find(m=>m.id===a.memberId);
+          const tipo = m ? m.type : null;
+          const proofKey = g.id+'|'+a.memberId;
+          const proof = state.gameProofs[proofKey];
+          const dataPagFmt = a.dataPagamento ? new Date(a.dataPagamento).toLocaleString('pt-BR',{dateStyle:'short', timeStyle:'short'}) : '';
           return `
-          <li>
-            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-              <span>${m.name}</span>
-              <span class="tag ${m.type}">${m.type}</span>
-            </div>
-            <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
+          <li style="flex-direction:column; align-items:stretch;">
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:space-between;">
+              <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                <span>${a.nome}</span>
+                ${tipo ? `<span class="tag ${tipo}">${tipo}</span>` : '<span class="muted">(membro removido)</span>'}
+              </div>
               <label class="check">
-                <input type="checkbox" ${att.present?'checked':''} onchange="setAttendance('${g.id}','${m.id}','present',this.checked)">
-                compareceu
-              </label>
-              ${att.present ? `
-              <label class="check">
-                <input type="checkbox" ${att.gkForGame?'checked':''} onchange="setAttendance('${g.id}','${m.id}','gkForGame',this.checked)">
+                <input type="checkbox" ${a.gkForGame?'checked':''} onchange="setParticipanteGoleiro('${g.id}','${a.memberId}', this.checked)">
                 goleiro nesse jogo
-              </label>` : ''}
-              ${(m.type==='mensalista' || att.gkForGame) && att.present ? `<span class="muted">${att.gkForGame ? 'goleiro não paga' : 'não paga jogo'}</span>` : ''}
+              </label>
             </div>
-            ${m.type==='integrante' && att.present && !att.gkForGame ? (()=>{
-              const proofKey = g.id+'|'+m.id;
-              const proof = state.gameProofs[proofKey];
-              return `
-              <div style="display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap;">
-                <button class="action small ${att.paid ? '' : 'ghost'}" style="${att.paid ? 'background:#7BC67E; color:var(--ink);' : ''}" onclick="setAttendance('${g.id}','${m.id}','paid',${!att.paid})">${att.paid ? '✓ Pago R$15' : 'Marcar pago R$15'}</button>
-                <button class="action small ghost" onclick="anexarComprovante('jogo','${proofKey}')">📎 ${proof ? 'Trocar comprovante' : 'Anexar comprovante'}</button>
-                ${proof ? `
-                <span class="tag" style="background:rgba(123,198,126,0.15); color:#7BC67E; border:1px solid #7BC67E;">comprovante ✓</span>
-                <button class="action small ghost" onclick="verComprovante('jogo','${proofKey}')">Ver</button>
-                <button class="action small danger" onclick="removerComprovante('jogo','${proofKey}')">Remover</button>
-                ` : ''}
-              </div>`;
-            })() : ''}
+            ${a.gkForGame ? `
+            <div class="muted" style="margin-top:6px;">goleiro não paga</div>
+            ` : `
+            <div style="display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap;">
+              <button class="action small ${a.paid ? '' : 'ghost'}" style="${a.paid ? 'background:#7BC67E; color:var(--ink);' : ''}" onclick="marcarPagamento('${g.id}','${a.memberId}', ${!a.paid})">${a.paid ? '✓ Pago' : 'Não pago'}</button>
+              <input type="number" step="0.01" placeholder="Valor pago" value="${a.valorPago!=null ? a.valorPago : ''}" style="max-width:120px;" onchange="atualizarValorPago('${g.id}','${a.memberId}', this.value)">
+              ${dataPagFmt ? `<span class="muted">pago em ${dataPagFmt}</span>` : ''}
+              <button class="action small ghost" onclick="anexarComprovante('jogo','${proofKey}')">📎 ${proof ? 'Trocar comprovante' : 'Anexar comprovante'}</button>
+              ${proof ? `
+              <span class="tag" style="background:rgba(123,198,126,0.15); color:#7BC67E; border:1px solid #7BC67E;">comprovante ✓</span>
+              <button class="action small ghost" onclick="verComprovante('jogo','${proofKey}')">Ver</button>
+              <button class="action small danger" onclick="removerComprovante('jogo','${proofKey}')">Remover</button>
+              ` : ''}
+            </div>
+            <div class="row" style="margin-top:8px;">
+              <input type="text" placeholder="Observação (opcional)" value="${(a.observacao||'').replace(/"/g,'&quot;')}" onchange="atualizarObservacaoParticipante('${g.id}','${a.memberId}', this.value)">
+            </div>
+            `}
+            ${editando ? `
+            <div class="row" style="margin-top:8px;">
+              <button class="action small danger" onclick="removerParticipante('${g.id}','${a.memberId}')">Remover participante</button>
+            </div>
+            ` : ''}
           </li>`;
         }).join('')}
       </ul>
+
+      ${editando ? `
+      <div class="row" style="margin:14px 0 8px;">
+        <input type="text" placeholder="Buscar jogador pra adicionar…" value="${buscaAdd}" oninput="filtrarAdicionarParticipante('${g.id}', this.value)">
+      </div>
+      <ul class="list">
+        ${candidatosAdicionar.length ? candidatosAdicionar.map(m=>`
+          <li>
+            <div style="display:flex; align-items:center; gap:8px;">
+              <span>${m.name}</span>
+              <span class="tag ${m.type}">${m.type}</span>
+            </div>
+            <button class="action small ghost" onclick="adicionarParticipante('${g.id}','${m.id}')">+ Adicionar</button>
+          </li>
+        `).join('') : '<li><span class="muted">nenhum outro membro pra adicionar</span></li>'}
+      </ul>
+      ` : ''}
+
       <div class="row" style="margin:16px 0 8px;">
         <span class="muted" style="flex:none;">Convidados <small>pagam só os R$15 desse jogo</small></span>
       </div>
@@ -855,7 +968,9 @@ function renderDespesas(){
     return;
   }
   const ordenadas = [...state.extraExpenses].sort((a,b)=> b.date.localeCompare(a.date));
-  ul.innerHTML = ordenadas.map(d=>`
+  const LIMITE = 4;
+  const visiveis = despesasExpandido ? ordenadas : ordenadas.slice(0, LIMITE);
+  ul.innerHTML = visiveis.map(d=>`
     <li>
       <div>
         <div>${d.description}</div>
@@ -866,7 +981,15 @@ function renderDespesas(){
         <button class="action small danger" onclick="removerDespesa('${d.id}')">Excluir</button>
       </div>
     </li>
-  `).join('');
+  `).join('') + (ordenadas.length > LIMITE ? `
+    <li style="justify-content:center; cursor:pointer;" onclick="toggleDespesas()">
+      <span class="muted" style="text-decoration:underline;">${despesasExpandido ? 'Ver menos ▲' : `Ver mais (${ordenadas.length - LIMITE}) ▼`}</span>
+    </li>
+  ` : '');
+}
+window.toggleDespesas = function(){
+  despesasExpandido = !despesasExpandido;
+  renderDespesas();
 }
 
 function renderFechamento(){
@@ -979,7 +1102,7 @@ window.toggleHistorico = function(){
 
 function renderResumo(){
   const btnSaldo = document.getElementById('btn-saldo-inicial');
-  if(btnSaldo) btnSaldo.textContent = `Ajustar saldo inicial (${fmtMoney(state.saldoInicial||0)})`;
+  if(btnSaldo) btnSaldo.textContent = `saldo inicial travado em ${fmtMoney(state.saldoInicial||0)}`;
   const meses = allMonthKeys();
   const el = document.getElementById('resumo-tabela');
   if(meses.length===0 || state.members.length===0){
@@ -1032,9 +1155,9 @@ function renderPendencias(){
   state.games.forEach(g=>{
     g.attendees.forEach(a=>{
       const m = state.members.find(m=>m.id===a.memberId);
-      if(m && m.type==='integrante' && !a.gkForGame && a.present && !a.paid){
+      if(m && m.type==='integrante' && !a.gkForGame && !a.paid){
         const dataFmt = new Date(g.date+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit', month:'2-digit'});
-        linhas.push({ nome: m.name, desc: `jogo ${dataFmt}`, valor: FEES.jogo, data: g.date });
+        linhas.push({ nome: a.nome || m.name, desc: `jogo ${dataFmt}`, valor: FEES.jogo, data: g.date });
       }
     });
     (g.convidados||[]).forEach(c=>{
@@ -1111,13 +1234,18 @@ window.removerMembro = async function(id){
 async function addJogo(){
   const data = document.getElementById('novo-jogo-data').value;
   if(!data) return;
+  if(data !== JOGO_UNICO_DATA){
+    alert('Por enquanto só é possível lançar o jogo do dia 31/07/2026.');
+    return;
+  }
   const novoId = uid();
   state.games.push({
     id: novoId,
     date: data,
     monthKey: data.slice(0,7),
-    attendees: state.members.map(m=>({ memberId: m.id, present:false, paid:false, gkForGame: !!m.goalkeeper })),
-    convidados: []
+    attendees: [],
+    convidados: [],
+    presencaConfirmada: false
   });
   expandedGames.add(novoId);
   logAtividade(`criou o jogo de ${new Date(data+'T12:00:00').toLocaleDateString('pt-BR')}`);
@@ -1138,6 +1266,7 @@ window.salvarJogo = async function(gameId){
   if(g) logAtividade(`salvou o jogo de ${new Date(g.date+'T12:00:00').toLocaleDateString('pt-BR')}`);
   render();
   await save();
+  if(g) await sincronizarParticipantesSupabase(g);
 }
 window.removerJogo = async function(id){
   if(!confirm('Excluir este jogo e os pagamentos registrados nele?')) return;
@@ -1146,17 +1275,156 @@ window.removerJogo = async function(id){
   if(g) logAtividade(`excluiu o jogo de ${new Date(g.date+'T12:00:00').toLocaleDateString('pt-BR')}`);
   render();
   await save();
+  if(g && supabaseOk){
+    try{ await supabase.from('game_participants').delete().eq('game_id', g.id); }catch(e){}
+  }
 }
-window.setAttendance = function(gameId, memberId, field, value){
+
+// ---------- Confirmação de presença ----------
+window.filtrarConfirmacao = function(gameId, texto){
+  confirmSearch[gameId] = texto;
+  render();
+}
+window.toggleSelecaoConfirmacao = function(gameId, memberId, marcado){
+  if(!confirmSelected[gameId]) confirmSelected[gameId] = new Set();
+  if(marcado) confirmSelected[gameId].add(memberId);
+  else confirmSelected[gameId].delete(memberId);
+  render();
+}
+window.confirmarPresenca = async function(gameId){
   const g = state.games.find(g=>g.id===gameId);
   if(!g) return;
-  const member = state.members.find(m=>m.id===memberId);
-  let a = g.attendees.find(a=>a.memberId===memberId);
-  if(!a){ a = { memberId, present:false, paid:false, gkForGame: !!(member&&member.goalkeeper) }; g.attendees.push(a); }
-  a[field] = value;
-  if(field==='present' && !value) a.paid = false;
-  if(field==='gkForGame' && value) a.paid = false;
+  const selecionados = confirmSelected[gameId] || new Set();
+  if(selecionados.size===0){
+    if(!confirm('Nenhum jogador selecionado. Confirmar mesmo assim (lista vazia)?')) return;
+  }
+  g.attendees = [...selecionados].map(memberId=>{
+    const m = state.members.find(m=>m.id===memberId);
+    return {
+      memberId,
+      nome: m ? m.name : '(removido)',
+      present: true,
+      paid: false,
+      valorPago: null,
+      dataPagamento: null,
+      observacao: '',
+      gkForGame: !!(m && m.goalkeeper)
+    };
+  });
+  g.presencaConfirmada = true;
+  delete confirmSelected[gameId];
+  delete confirmSearch[gameId];
+  logAtividade(`confirmou presença do jogo de ${new Date(g.date+'T12:00:00').toLocaleDateString('pt-BR')} (${g.attendees.length} jogador${g.attendees.length===1?'':'es'})`);
   render();
+  await save();
+  await sincronizarParticipantesSupabase(g);
+}
+
+// ---------- Editar participantes ----------
+window.toggleEditarParticipantes = function(gameId){
+  editingParticipants[gameId] = !editingParticipants[gameId];
+  render();
+}
+window.filtrarAdicionarParticipante = function(gameId, texto){
+  addParticipantSearch[gameId] = texto;
+  render();
+}
+window.adicionarParticipante = function(gameId, memberId){
+  const g = state.games.find(g=>g.id===gameId);
+  if(!g) return;
+  if(g.attendees.some(a=>a.memberId===memberId)) return;
+  const m = state.members.find(m=>m.id===memberId);
+  g.attendees.push({
+    memberId,
+    nome: m ? m.name : '(removido)',
+    present: true,
+    paid: false,
+    valorPago: null,
+    dataPagamento: null,
+    observacao: '',
+    gkForGame: !!(m && m.goalkeeper)
+  });
+  render();
+}
+window.removerParticipante = function(gameId, memberId){
+  const g = state.games.find(g=>g.id===gameId);
+  if(!g) return;
+  if(!confirm('Remover esse participante do jogo? Os pagamentos dos demais participantes não são afetados.')) return;
+  g.attendees = g.attendees.filter(a=>a.memberId!==memberId);
+  render();
+}
+
+// ---------- Pagamentos dos participantes ----------
+window.marcarPagamento = function(gameId, memberId, pago){
+  const g = state.games.find(g=>g.id===gameId);
+  if(!g) return;
+  const a = g.attendees.find(a=>a.memberId===memberId);
+  if(!a) return;
+  a.paid = pago;
+  if(pago){
+    if(a.valorPago==null) a.valorPago = FEES.jogo;
+    a.dataPagamento = new Date().toISOString();
+  } else {
+    a.dataPagamento = null;
+  }
+  render();
+}
+window.atualizarValorPago = function(gameId, memberId, valor){
+  const g = state.games.find(g=>g.id===gameId);
+  if(!g) return;
+  const a = g.attendees.find(a=>a.memberId===memberId);
+  if(!a) return;
+  const v = parseFloat(valor);
+  a.valorPago = isNaN(v) ? null : v;
+}
+window.atualizarObservacaoParticipante = function(gameId, memberId, texto){
+  const g = state.games.find(g=>g.id===gameId);
+  if(!g) return;
+  const a = g.attendees.find(a=>a.memberId===memberId);
+  if(!a) return;
+  a.observacao = texto;
+}
+window.setParticipanteGoleiro = function(gameId, memberId, value){
+  const g = state.games.find(g=>g.id===gameId);
+  if(!g) return;
+  const a = g.attendees.find(a=>a.memberId===memberId);
+  if(!a) return;
+  a.gkForGame = value;
+  if(value){ a.paid = false; a.valorPago = null; a.dataPagamento = null; }
+  render();
+}
+
+// Espelha os participantes do jogo numa tabela relacional do Supabase
+// (não é lida de volta pela interface — o app continua funcionando
+// normalmente mesmo se isso falhar; serve como registro/histórico
+// estruturado no banco).
+async function sincronizarParticipantesSupabase(g){
+  if(!supabaseOk) return;
+  try{
+    const idsAtuais = new Set(g.attendees.map(a=>a.memberId));
+    const { data: existentes } = await supabase.from('game_participants').select('member_id').eq('game_id', g.id);
+    const idsRemover = (existentes||[]).map(r=>r.member_id).filter(id=>!idsAtuais.has(id));
+    if(idsRemover.length){
+      await supabase.from('game_participants').delete().eq('game_id', g.id).in('member_id', idsRemover);
+    }
+    if(g.attendees.length){
+      const rows = g.attendees.map(a=>({
+        game_id: g.id,
+        member_id: a.memberId,
+        member_name: a.nome || '',
+        present: true,
+        paid: !!a.paid,
+        valor_pago: a.valorPago,
+        data_pagamento: a.dataPagamento,
+        observacao: a.observacao || '',
+        gk_for_game: !!a.gkForGame,
+        updated_at: new Date().toISOString()
+      }));
+      await supabase.from('game_participants').upsert(rows, { onConflict: 'game_id,member_id' });
+    }
+  }catch(e){
+    console.warn('Falha ao sincronizar participantes no Supabase:', e);
+  }
 }
 
 window.addConvidado = function(gameId){
@@ -1279,6 +1547,10 @@ async function addDespesa(){
   const desc = document.getElementById('nova-despesa-desc').value.trim();
   const valor = parseFloat(document.getElementById('nova-despesa-valor').value);
   if(!data || !desc || !valor) return;
+  if(data < DESPESA_MIN_DATA){
+    alert('O clube passou a operar por aqui a partir de agosto/2026 — não dá pra cadastrar despesas com data anterior a isso.');
+    return;
+  }
   state.extraExpenses.push({ id: uid(), date: data, description: desc, amount: valor });
   document.getElementById('nova-despesa-desc').value = '';
   document.getElementById('nova-despesa-valor').value = '';
@@ -1379,17 +1651,6 @@ window.fazerLogin = async function(){
   }
 }
 
-window.editarSaldoInicial = async function(){
-  const atual = state.saldoInicial || 0;
-  const novoStr = prompt('Novo saldo inicial do caixa:', atual.toFixed(2));
-  if(novoStr === null) return;
-  const novo = parseFloat(novoStr.replace(',','.'));
-  if(isNaN(novo)) { alert('Valor inválido.'); return; }
-  state.saldoInicial = novo;
-  logAtividade(`ajustou o saldo inicial do caixa para ${fmtMoney(novo)}`);
-  render();
-  await save();
-}
 
 async function entrarNoApp(){
   document.getElementById('auth-overlay').style.display = 'none';
