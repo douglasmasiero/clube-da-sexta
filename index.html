@@ -135,13 +135,13 @@
   nav button{
     flex:1;
     font-family:'Bebas Neue',sans-serif;
-    font-size:13px;
-    letter-spacing:0.5px;
+    font-size:12px;
+    letter-spacing:0.3px;
     background:transparent;
     color:var(--chalk-dim);
     border:none;
     border-radius:10px;
-    padding:10px 2px 8px;
+    padding:10px 1px 8px;
     min-height:52px;
     cursor:pointer;
     touch-action:manipulation;
@@ -309,7 +309,7 @@
     h1{ font-size:32px; }
     .scoreboard .value{ font-size:22px; }
     .row > input, .row > select{ flex-basis:100%; }
-    nav button{ font-size:12px; }
+    nav button{ font-size:10.5px; }
   }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
@@ -402,6 +402,7 @@
 <nav>
   <button data-tab="resumo" class="active">Resumo</button>
   <button data-tab="membros">Membros</button>
+  <button data-tab="mensalidades">Mensalidades</button>
   <button data-tab="jogos">Jogos</button>
   <button data-tab="despesas">Despesas</button>
   <button data-tab="fechamento">Fechamento</button>
@@ -463,6 +464,17 @@
     </div>
   </section>
 
+  <!-- MENSALIDADES -->
+  <section class="tab" id="tab-mensalidades">
+    <div class="card">
+      <h2>Mês de referência</h2>
+      <div class="row">
+        <input type="month" id="mes-mensalidades" min="2026-08">
+      </div>
+    </div>
+    <div id="mensalidades-conteudo"></div>
+  </section>
+
   <!-- JOGOS -->
   <section class="tab" id="tab-jogos">
     <div class="card">
@@ -479,7 +491,13 @@
   <!-- DESPESAS EXTRAS -->
   <section class="tab" id="tab-despesas">
     <div class="card">
-      <h2>Nova despesa <small>bola, uniforme, colete…</small></h2>
+      <h2>Nova despesa <small>campo, bola, uniforme, colete…</small></h2>
+      <div class="row">
+        <select id="nova-despesa-tipo">
+          <option value="extra">Despesa extra (bola, uniforme, colete…)</option>
+          <option value="campo">Despesa do campo (aluguel mensal)</option>
+        </select>
+      </div>
       <div class="row">
         <input type="date" id="nova-despesa-data" min="2026-08-01">
         <input type="text" id="nova-despesa-desc" placeholder="Descrição (ex: 2 bolas novas)">
@@ -525,6 +543,7 @@ let filtroPendencias = 'todas';
 let confirmSelected = {};
 let confirmSearch = {};
 let editingParticipants = {};
+let soPendentes = {};
 let addParticipantSearch = {};
 
 function uid(){ return Math.random().toString(36).slice(2,10); }
@@ -708,6 +727,7 @@ function render(){
   renderJogos();
   renderDespesas();
   renderFechamento();
+  renderMensalidades();
   renderHistoricoAtividades();
   renderResumo();
   renderPendencias();
@@ -766,7 +786,12 @@ function renderJogos(){
     const goleirosPresentes = g.attendees.filter(a=> a.gkForGame).length + convidados.filter(c=>c.gk).length;
     const cheio = linhaPresentes >= CAPACIDADE_LINHA;
     const dataFmt = new Date(g.date+'T12:00:00').toLocaleDateString('pt-BR',{weekday:'long', day:'2-digit', month:'2-digit', year:'numeric'});
-    const devendo = g.attendees.filter(a=> !a.gkForGame && !a.paid).length + convidados.filter(c=>!c.gk && !c.paid).length;
+    const devendo = g.attendees.filter(a=>{
+      if(a.gkForGame) return false;
+      const m = state.members.find(m=>m.id===a.memberId);
+      if(m && m.type==='mensalista') return false;
+      return !a.paid;
+    }).length + convidados.filter(c=>!c.gk && !c.paid).length;
     const pagamentosLabel = !g.presencaConfirmada ? 'presença não confirmada' : (devendo>0 ? `${devendo} pendente${devendo===1?'':'s'}` : 'pagamentos em dia');
     const aberto = expandedGames.has(g.id);
     const corPendencia = !g.presencaConfirmada ? 'var(--gold)' : (devendo>0 ? 'var(--red)' : '#7BC67E');
@@ -860,11 +885,22 @@ function renderJogos(){
 
       <div class="row" style="margin:10px 0;">
         <span class="muted" style="flex:none;">Lista de participantes</span>
+        <button class="action small ${soPendentes[g.id] ? '' : 'ghost'}" style="${soPendentes[g.id] ? 'background:var(--red); color:var(--chalk);' : ''}" onclick="toggleSoPendentes('${g.id}')">${soPendentes[g.id] ? '✓ Só quem falta pagar' : 'Ver só quem falta pagar'}</button>
         <button class="action small ${editando ? '' : 'ghost'}" style="${editando ? 'background:var(--gold); color:var(--ink);' : ''}" onclick="toggleEditarParticipantes('${g.id}')">${editando ? '✓ Editando participantes' : 'Editar participantes'}</button>
       </div>
 
       <ul class="list">
-        ${participantes.map(a=>{
+        ${(()=>{
+          const listaExibida = soPendentes[g.id] ? participantes.filter(a=>{
+            if(a.gkForGame) return false;
+            const m = state.members.find(m=>m.id===a.memberId);
+            if(m && m.type==='mensalista') return false;
+            return !a.paid;
+          }) : participantes;
+          if(soPendentes[g.id] && listaExibida.length===0){
+            return '<li><span class="muted">🎉 Ninguém pendente — todo mundo já pagou.</span></li>';
+          }
+          return listaExibida.map(a=>{
           const m = state.members.find(m=>m.id===a.memberId);
           const tipo = m ? m.type : null;
           const proofKey = g.id+'|'+a.memberId;
@@ -910,7 +946,8 @@ function renderJogos(){
             </div>
             ` : ''}
           </li>`;
-        }).join('')}
+          }).join('');
+        })()}
       </ul>
 
       ${editando ? `
@@ -982,24 +1019,42 @@ function renderJogos(){
 function renderDespesas(){
   const ul = document.getElementById('lista-despesas');
   const totalEl = document.getElementById('despesas-total');
-  const total = state.extraExpenses.reduce((acc,d)=>acc+d.amount,0);
-  totalEl.textContent = state.extraExpenses.length ? '(' + fmtMoney(total) + ' no total)' : '';
-  if(state.extraExpenses.length===0){
-    ul.innerHTML = '<div class="empty"><strong>Nada registrado</strong>Bolas, uniformes, coletes, o que o grupo comprar entra aqui e sai do fundo de confraternização.</div>';
+
+  const itensCampo = Object.keys(state.monthlyExpenses)
+    .filter(mk => state.monthlyExpenses[mk])
+    .map(mk => ({
+      tipo: 'campo',
+      key: mk,
+      date: mk+'-01',
+      description: `Despesa do campo — ${monthLabel(mk)}`,
+      amount: state.monthlyExpenses[mk]
+    }));
+  const itensExtras = state.extraExpenses.map(d => ({
+    tipo: 'extra', key: d.id, date: d.date, description: d.description, amount: d.amount
+  }));
+  const todosItens = [...itensCampo, ...itensExtras];
+
+  const total = todosItens.reduce((acc,d)=>acc+d.amount,0);
+  totalEl.textContent = todosItens.length ? '(' + fmtMoney(total) + ' no total)' : '';
+  if(todosItens.length===0){
+    ul.innerHTML = '<div class="empty"><strong>Nada registrado</strong>Campo, bolas, uniformes, coletes — tudo que o grupo gastar entra aqui.</div>';
     return;
   }
-  const ordenadas = [...state.extraExpenses].sort((a,b)=> b.date.localeCompare(a.date));
+  const ordenadas = todosItens.sort((a,b)=> b.date.localeCompare(a.date));
   const LIMITE = 4;
   const visiveis = despesasExpandido ? ordenadas : ordenadas.slice(0, LIMITE);
   ul.innerHTML = visiveis.map(d=>`
     <li>
       <div>
-        <div>${d.description}</div>
-        <div class="muted">${new Date(d.date+'T12:00:00').toLocaleDateString('pt-BR')}</div>
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <span>${d.description}</span>
+          ${d.tipo==='campo' ? '<span class="tag goleiro">campo</span>' : ''}
+        </div>
+        <div class="muted">${d.tipo==='campo' ? monthLabel(d.key) : new Date(d.date+'T12:00:00').toLocaleDateString('pt-BR')}</div>
       </div>
       <div style="display:flex; align-items:center; gap:12px;">
         <span style="font-family:'JetBrains Mono',monospace; color:var(--red)">${fmtMoney(d.amount)}</span>
-        <button class="action small danger" onclick="removerDespesa('${d.id}')">Excluir</button>
+        <button class="action small danger" onclick="${d.tipo==='campo' ? `removerDespesaCampo('${d.key}')` : `removerDespesa('${d.key}')`}">Excluir</button>
       </div>
     </li>
   `).join('') + (ordenadas.length > LIMITE ? `
@@ -1027,6 +1082,35 @@ function renderFechamento(){
     return;
   }
   const c = computeMonth(mk);
+  el.innerHTML = `
+    <div class="card">
+      <h2>Despesa do campo <small>${monthLabel(mk)}</small></h2>
+      <p class="muted">${state.monthlyExpenses[mk] ? `Valor lançado: ${fmtMoney(state.monthlyExpenses[mk])}` : 'Nenhum valor lançado ainda para este mês.'} Cadastre ou ajuste na aba <strong>Despesas</strong>.</p>
+    </div>
+    <div class="card">
+      <h2>Fechamento de ${monthLabel(mk)}</h2>
+      <div class="table-scroll">
+      <table>
+        <tr><td>Mensalidades recebidas</td><td class="num">${fmtMoney(c.receitaMensalidades)}</td></tr>
+        <tr><td>Jogos avulsos recebidos</td><td class="num">${fmtMoney(c.receitaJogos)}</td></tr>
+        <tr><td>Despesa do campo</td><td class="num">− ${fmtMoney(c.despesaCampo)}</td></tr>
+        <tr><td>Despesas extras (bola, uniforme…)</td><td class="num">− ${fmtMoney(c.despesaExtras)}</td></tr>
+        <tr class="total"><td>Saldo do mês (vai pro fundo de confraternização)</td><td class="num">${fmtMoney(c.saldo)}</td></tr>
+      </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderMensalidades(){
+  const input = document.getElementById('mes-mensalidades');
+  if(!input.value) input.value = todayMonthKey();
+  const mk = input.value;
+  const el = document.getElementById('mensalidades-conteudo');
+  if(state.members.length===0){
+    el.innerHTML = '<div class="card"><div class="empty"><strong>Cadastre membros primeiro</strong></div></div>';
+    return;
+  }
   el.innerHTML = `
     <div class="card">
       <h2>Mensalidades — ${monthLabel(mk)}</h2>
@@ -1057,25 +1141,6 @@ function renderFechamento(){
           </li>`;
         }).join('')}
       </ul>
-    </div>
-    <div class="card">
-      <h2>Despesa do campo</h2>
-      <div class="row">
-        <input type="number" step="0.01" id="despesa-campo" placeholder="Valor pago pelo campo em ${monthLabel(mk)}" value="${state.monthlyExpenses[mk] ?? ''}">
-        <button class="action" onclick="salvarDespesa('${mk}')">Salvar despesa</button>
-      </div>
-    </div>
-    <div class="card">
-      <h2>Fechamento de ${monthLabel(mk)}</h2>
-      <div class="table-scroll">
-      <table>
-        <tr><td>Mensalidades recebidas</td><td class="num">${fmtMoney(c.receitaMensalidades)}</td></tr>
-        <tr><td>Jogos avulsos recebidos</td><td class="num">${fmtMoney(c.receitaJogos)}</td></tr>
-        <tr><td>Despesa do campo</td><td class="num">− ${fmtMoney(c.despesaCampo)}</td></tr>
-        <tr><td>Despesas extras (bola, uniforme…)</td><td class="num">− ${fmtMoney(c.despesaExtras)}</td></tr>
-        <tr class="total"><td>Saldo do mês (vai pro fundo de confraternização)</td><td class="num">${fmtMoney(c.saldo)}</td></tr>
-      </table>
-      </div>
     </div>
   `;
 }
@@ -1352,6 +1417,10 @@ window.toggleEditarParticipantes = function(gameId){
   editingParticipants[gameId] = !editingParticipants[gameId];
   render();
 }
+window.toggleSoPendentes = function(gameId){
+  soPendentes[gameId] = !soPendentes[gameId];
+  render();
+}
 window.filtrarAdicionarParticipante = function(gameId, texto){
   addParticipantSearch[gameId] = texto;
   render();
@@ -1554,27 +1623,35 @@ window.removerComprovante = async function(tipo, chave){
   render();
   await save();
 }
-window.salvarDespesa = async function(mk){
-  const val = parseFloat(document.getElementById('despesa-campo').value) || 0;
-  state.monthlyExpenses[mk] = val;
-  logAtividade(`definiu a despesa do campo de ${monthLabel(mk)} em ${fmtMoney(val)}`);
-  render();
-  await save();
-}
 
 async function addDespesa(){
+  const tipo = document.getElementById('nova-despesa-tipo').value;
   const data = document.getElementById('nova-despesa-data').value;
   const desc = document.getElementById('nova-despesa-desc').value.trim();
   const valor = parseFloat(document.getElementById('nova-despesa-valor').value);
-  if(!data || !desc || !valor) return;
+  if(!data || !valor) return;
+  if(tipo==='extra' && !desc) return;
   if(data < DESPESA_MIN_DATA){
     alert('O clube passou a operar por aqui a partir de agosto/2026 — não dá pra cadastrar despesas com data anterior a isso.');
     return;
   }
-  state.extraExpenses.push({ id: uid(), date: data, description: desc, amount: valor });
+  if(tipo==='campo'){
+    const mk = data.slice(0,7);
+    state.monthlyExpenses[mk] = valor;
+    logAtividade(`definiu a despesa do campo de ${monthLabel(mk)} em ${fmtMoney(valor)}`);
+  } else {
+    state.extraExpenses.push({ id: uid(), date: data, description: desc, amount: valor });
+    logAtividade(`registrou despesa "${desc}" de ${fmtMoney(valor)}`);
+  }
   document.getElementById('nova-despesa-desc').value = '';
   document.getElementById('nova-despesa-valor').value = '';
-  logAtividade(`registrou despesa "${desc}" de ${fmtMoney(valor)}`);
+  render();
+  await save();
+}
+window.removerDespesaCampo = async function(mk){
+  if(!confirm(`Remover a despesa do campo de ${monthLabel(mk)}?`)) return;
+  delete state.monthlyExpenses[mk];
+  logAtividade(`removeu a despesa do campo de ${monthLabel(mk)}`);
   render();
   await save();
 }
@@ -1714,6 +1791,7 @@ document.getElementById('btn-add-membro').addEventListener('click', addMembro);
 document.getElementById('btn-add-jogo').addEventListener('click', addJogo);
 document.getElementById('btn-add-despesa').addEventListener('click', addDespesa);
 document.getElementById('btn-add-mes').addEventListener('click', ()=>{ renderFechamento(); });
+document.getElementById('mes-mensalidades').addEventListener('change', renderMensalidades);
 document.getElementById('mes-fechamento').addEventListener('change', renderFechamento);
 
 document.querySelectorAll('nav button').forEach(btn=>{
