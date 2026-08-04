@@ -278,6 +278,7 @@
   .status{ font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--chalk-dim); margin-top:10px; }
 
   .game-collapsed{ transition:border-color .15s ease; touch-action:manipulation; }
+  .mensalidade-linha, .mensalidade-linha .tag, .mensalidade-linha .muted{ font-size:14px; }
   .game-collapsed:active{ border-color:var(--gold); }
 
   #auth-overlay, #saldo-inicial-overlay{
@@ -1131,7 +1132,7 @@ function renderMensalidades(){
           const aberto = !!expandedMensalidade[chaveExp];
           return `
           <li style="flex-direction:column; align-items:stretch;">
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; cursor:pointer;" onclick="toggleMensalidade('${chaveExp}')">
+            <div class="mensalidade-linha" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; cursor:pointer;" onclick="toggleMensalidade('${chaveExp}')">
               <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
                 <span>${m.name}</span>
                 <span class="tag ${m.type}">${m.type}</span>
