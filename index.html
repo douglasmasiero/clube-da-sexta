@@ -469,8 +469,11 @@
     <div class="card">
       <h2>Mês de referência</h2>
       <div class="row">
+        <button class="action small ghost" onclick="mudarMesMensalidades(-1)">◀</button>
         <input type="month" id="mes-mensalidades" min="2026-08">
+        <button class="action small ghost" onclick="mudarMesMensalidades(1)">▶</button>
       </div>
+      <p class="muted">Pode avançar pra meses futuros — útil se alguém quiser adiantar a mensalidade.</p>
     </div>
     <div id="mensalidades-conteudo"></div>
   </section>
@@ -544,6 +547,7 @@ let confirmSelected = {};
 let confirmSearch = {};
 let editingParticipants = {};
 let soPendentes = {};
+let expandedMensalidade = {};
 let addParticipantSearch = {};
 
 function uid(){ return Math.random().toString(36).slice(2,10); }
@@ -1111,33 +1115,43 @@ function renderMensalidades(){
     el.innerHTML = '<div class="card"><div class="empty"><strong>Cadastre membros primeiro</strong></div></div>';
     return;
   }
+  const ordenados = [...state.members].sort((a,b)=>{
+    if(a.type !== b.type) return a.type==='mensalista' ? -1 : 1;
+    return a.name.localeCompare(b.name, 'pt-BR');
+  });
   el.innerHTML = `
     <div class="card">
       <h2>Mensalidades — ${monthLabel(mk)}</h2>
       <ul class="list">
-        ${state.members.map(m=>{
-          const paid = !!state.monthlyFees[mk+'|'+m.id];
+        ${ordenados.map(m=>{
+          const chaveExp = mk+'|'+m.id;
+          const paid = !!state.monthlyFees[chaveExp];
           const valor = FEES[m.type];
-          const proofKey = mk+'|'+m.id;
-          const proof = state.monthlyProofs[proofKey];
+          const proof = state.monthlyProofs[chaveExp];
+          const aberto = !!expandedMensalidade[chaveExp];
           return `
           <li style="flex-direction:column; align-items:stretch;">
-            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; cursor:pointer;" onclick="toggleMensalidade('${chaveExp}')">
               <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
                 <span>${m.name}</span>
                 <span class="tag ${m.type}">${m.type}</span>
                 <span class="muted">${fmtMoney(valor)}</span>
               </div>
+              <span class="tag" style="background:${paid ? 'rgba(123,198,126,0.15)' : 'rgba(214,69,69,0.15)'}; color:${paid ? '#7BC67E' : 'var(--red)'}; border:1px solid ${paid ? '#7BC67E' : 'var(--red)'};">${paid ? '✓ pago' : 'pendente'}</span>
+            </div>
+            ${aberto ? `
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; flex-wrap:wrap;">
               <button class="action small ${paid ? '' : 'ghost'}" style="${paid ? 'background:#7BC67E; color:var(--ink);' : ''}" onclick="setMonthlyFee('${mk}','${m.id}',${!paid})">${paid ? '✓ Pago' : 'Marcar pago'}</button>
             </div>
             <div style="display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap;">
-              <button class="action small ghost" onclick="anexarComprovante('mensal','${proofKey}')">📎 ${proof ? 'Trocar comprovante' : 'Anexar comprovante'}</button>
+              <button class="action small ghost" onclick="anexarComprovante('mensal','${chaveExp}')">📎 ${proof ? 'Trocar comprovante' : 'Anexar comprovante'}</button>
               ${proof ? `
               <span class="tag" style="background:rgba(123,198,126,0.15); color:#7BC67E; border:1px solid #7BC67E;">comprovante ✓</span>
-              <button class="action small ghost" onclick="verComprovante('mensal','${proofKey}')">Ver</button>
-              <button class="action small danger" onclick="removerComprovante('mensal','${proofKey}')">Remover</button>
+              <button class="action small ghost" onclick="verComprovante('mensal','${chaveExp}')">Ver</button>
+              <button class="action small danger" onclick="removerComprovante('mensal','${chaveExp}')">Remover</button>
               ` : '<span class="muted">nenhum comprovante anexado</span>'}
             </div>
+            ` : ''}
           </li>`;
         }).join('')}
       </ul>
@@ -1420,6 +1434,19 @@ window.toggleEditarParticipantes = function(gameId){
 window.toggleSoPendentes = function(gameId){
   soPendentes[gameId] = !soPendentes[gameId];
   render();
+}
+window.toggleMensalidade = function(chave){
+  expandedMensalidade[chave] = !expandedMensalidade[chave];
+  renderMensalidades();
+}
+window.mudarMesMensalidades = function(delta){
+  const input = document.getElementById('mes-mensalidades');
+  const [ano, mes] = (input.value || todayMonthKey()).split('-').map(Number);
+  const d = new Date(ano, mes - 1 + delta, 1);
+  const novoMk = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+  if(novoMk < MENSALIDADE_MES_MINIMO) return;
+  input.value = novoMk;
+  renderMensalidades();
 }
 window.filtrarAdicionarParticipante = function(gameId, texto){
   addParticipantSearch[gameId] = texto;
