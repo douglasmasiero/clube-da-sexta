@@ -786,7 +786,7 @@ function renderJogos(){
   }
   const ordenados = [...state.games].sort((a,b)=> b.date.localeCompare(a.date));
   el.innerHTML = ordenados.map(g=>{
-    const convidados = g.convidados || [];
+    const convidados = [...(g.convidados || [])].sort((a,b)=> a.nome.localeCompare(b.nome, 'pt-BR'));
     const linhaPresentes = g.attendees.filter(a=> !a.gkForGame).length + convidados.filter(c=>!c.gk).length;
     const goleirosPresentes = g.attendees.filter(a=> a.gkForGame).length + convidados.filter(c=>c.gk).length;
     const cheio = linhaPresentes >= CAPACIDADE_LINHA;
@@ -1132,13 +1132,15 @@ function renderMensalidades(){
           const aberto = !!expandedMensalidade[chaveExp];
           return `
           <li style="flex-direction:column; align-items:stretch;">
-            <div class="mensalidade-linha" style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; cursor:pointer;" onclick="toggleMensalidade('${chaveExp}')">
+            <div class="mensalidade-linha" style="cursor:pointer;" onclick="toggleMensalidade('${chaveExp}')">
               <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
                 <span>${m.name}</span>
                 <span class="tag ${m.type}">${m.type}</span>
                 <span class="muted">${fmtMoney(valor)}</span>
               </div>
-              <span class="tag" style="background:${paid ? 'rgba(123,198,126,0.15)' : 'rgba(214,69,69,0.15)'}; color:${paid ? '#7BC67E' : 'var(--red)'}; border:1px solid ${paid ? '#7BC67E' : 'var(--red)'};">${paid ? '✓ pago' : 'pendente'}</span>
+              <div style="margin-top:8px;">
+                <span class="tag" style="background:${paid ? 'rgba(123,198,126,0.15)' : 'rgba(214,69,69,0.15)'}; color:${paid ? '#7BC67E' : 'var(--red)'}; border:1px solid ${paid ? '#7BC67E' : 'var(--red)'};">${paid ? '✓ pago' : 'pendente'}</span>
+              </div>
             </div>
             ${aberto ? `
             <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; flex-wrap:wrap;">
