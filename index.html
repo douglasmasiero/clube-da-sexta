@@ -278,7 +278,12 @@
   .status{ font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--chalk-dim); margin-top:10px; }
 
   .game-collapsed{ transition:border-color .15s ease; touch-action:manipulation; }
-  .mensalidade-linha, .mensalidade-linha .tag, .mensalidade-linha .muted{ font-size:14px; }
+  .mensalidade-linha, .mensalidade-linha .tag, .mensalidade-linha .muted{ font-size:11px; }
+  .mensalidade-linha{ display:flex; align-items:center; justify-content:space-between; gap:6px; }
+  .mensalidade-linha .tag{ padding:2px 6px; white-space:nowrap; flex:none; }
+  .mensalidade-linha .muted{ white-space:nowrap; flex:none; }
+  .mensalidade-nome{ white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+  .mensalidade-esquerda{ display:flex; align-items:center; gap:6px; min-width:0; flex:1; overflow:hidden; }
   .game-collapsed:active{ border-color:var(--gold); }
 
   #auth-overlay, #saldo-inicial-overlay{
@@ -436,7 +441,7 @@
       <p class="muted" style="line-height:1.6">
         <strong style="color:var(--gold)">Mensalistas</strong> pagam R$ 80/mês e não pagam jogo avulso.
         <strong style="color:#7BC67E">Integrantes</strong> pagam R$ 20/mês para estar no grupo, mais R$ 15 a cada jogo que comparecem — exceto os <strong style="color:var(--chalk)">goleiros</strong>, que não pagam o jogo avulso.
-        O grupo tem 23 jogadores fixos, mas cada jogo comporta até 16 na linha, além dos goleiros.
+        O grupo tem 23 jogadores fixos, mas cada jogo comporta até 12 na linha, além dos goleiros.
         O dinheiro arrecadado cobre o aluguel do campo todo mês — o que sobra vira o fundo de confraternização.
       </p>
     </div>
@@ -535,9 +540,9 @@
 
 <script>
 const FEES = { mensalista: 80, integrante: 20, jogo: 15 };
-const CAPACIDADE_LINHA = 16;
+const CAPACIDADE_LINHA = 12;
 const STORAGE_KEY = 'group-data';
-let state = { members: [], games: [], monthlyFees: {}, monthlyExpenses: {}, extraExpenses: [], monthlyProofs: {}, gameProofs: {}, activityLog: [], saldoInicial: 0, saldoInicialDefinido: false };
+let state = { members: [], games: [], monthlyFees: {}, monthlyExpenses: {}, extraExpenses: [], monthlyProofs: {}, gameProofs: {}, activityLog: [], saldoInicial: 0, saldoInicialDefinido: false, monthlyFeesExcluidas: {} };
 let loaded = false;
 let expandedGames = new Set();
 let comprovanteTarget = null;
@@ -612,7 +617,7 @@ async function load(){
     const res = await storageGet(STORAGE_KEY);
     if(res && res.value){
       const parsed = JSON.parse(res.value);
-      state = Object.assign({ members:[], games:[], monthlyFees:{}, monthlyExpenses:{}, extraExpenses:[], monthlyProofs:{}, gameProofs:{}, activityLog:[], saldoInicial:0, saldoInicialDefinido:false }, parsed);
+      state = Object.assign({ members:[], games:[], monthlyFees:{}, monthlyExpenses:{}, extraExpenses:[], monthlyProofs:{}, gameProofs:{}, activityLog:[], saldoInicial:0, saldoInicialDefinido:false, monthlyFeesExcluidas:{} }, parsed);
       state.members = state.members.map(m => Object.assign({ goalkeeper:false }, m));
       state.games = state.games.map(g => {
         const base = Object.assign({ convidados:[], presencaConfirmada: undefined }, g);
@@ -685,8 +690,9 @@ function allMonthKeys(){
 function computeMonth(mk){
   let receitaMensalidades = 0;
   state.members.forEach(m=>{
-    const paid = state.monthlyFees[mk+'|'+m.id];
-    if(paid) receitaMensalidades += FEES[m.type];
+    const chave = mk+'|'+m.id;
+    const paid = state.monthlyFees[chave];
+    if(paid && !state.monthlyFeesExcluidas[chave]) receitaMensalidades += FEES[m.type];
   });
   let receitaJogos = 0;
   state.games.filter(g=>g.monthKey===mk).forEach(g=>{
@@ -1127,25 +1133,30 @@ function renderMensalidades(){
         ${ordenados.map(m=>{
           const chaveExp = mk+'|'+m.id;
           const paid = !!state.monthlyFees[chaveExp];
+          const excluida = !!state.monthlyFeesExcluidas[chaveExp];
           const valor = FEES[m.type];
           const proof = state.monthlyProofs[chaveExp];
           const aberto = !!expandedMensalidade[chaveExp];
           return `
           <li style="flex-direction:column; align-items:stretch;">
             <div class="mensalidade-linha" style="cursor:pointer;" onclick="toggleMensalidade('${chaveExp}')">
-              <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-                <span>${m.name}</span>
+              <div class="mensalidade-esquerda">
+                <span class="mensalidade-nome">${m.name}</span>
                 <span class="tag ${m.type}">${m.type}</span>
                 <span class="muted">${fmtMoney(valor)}</span>
               </div>
-              <div style="margin-top:8px;">
-                <span class="tag" style="background:${paid ? 'rgba(123,198,126,0.15)' : 'rgba(214,69,69,0.15)'}; color:${paid ? '#7BC67E' : 'var(--red)'}; border:1px solid ${paid ? '#7BC67E' : 'var(--red)'};">${paid ? '✓ pago' : 'pendente'}</span>
-              </div>
+              <span class="tag" style="background:${paid ? 'rgba(123,198,126,0.15)' : 'rgba(214,69,69,0.15)'}; color:${paid ? '#7BC67E' : 'var(--red)'}; border:1px solid ${paid ? '#7BC67E' : 'var(--red)'};">${paid ? '✓ pago' : 'pendente'}</span>
             </div>
             ${aberto ? `
             <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; flex-wrap:wrap;">
               <button class="action small ${paid ? '' : 'ghost'}" style="${paid ? 'background:#7BC67E; color:var(--ink);' : ''}" onclick="setMonthlyFee('${mk}','${m.id}',${!paid})">${paid ? '✓ Pago' : 'Marcar pago'}</button>
             </div>
+            ${paid ? `
+            <label class="check" style="margin-top:8px;">
+              <input type="checkbox" ${excluida?'checked':''} onchange="toggleExcluirDoCaixa('${mk}','${m.id}', this.checked)">
+              Pagamento anterior ao app — não somar nesse valor no caixa
+            </label>
+            ` : ''}
             <div style="display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap;">
               <button class="action small ghost" onclick="anexarComprovante('mensal','${chaveExp}')">📎 ${proof ? 'Trocar comprovante' : 'Anexar comprovante'}</button>
               ${proof ? `
@@ -1586,8 +1597,18 @@ window.setConvidadoGoleiro = function(gameId, convidadoId, value){
 
 window.setMonthlyFee = async function(mk, memberId, value){
   state.monthlyFees[mk+'|'+memberId] = value;
+  if(!value) delete state.monthlyFeesExcluidas[mk+'|'+memberId];
   const m = state.members.find(m=>m.id===memberId);
   logAtividade(`marcou mensalidade de ${monthLabel(mk)} de ${m ? m.name : memberId} como ${value ? 'paga' : 'pendente'}`);
+  render();
+  await save();
+}
+window.toggleExcluirDoCaixa = async function(mk, memberId, value){
+  const chave = mk+'|'+memberId;
+  if(value) state.monthlyFeesExcluidas[chave] = true;
+  else delete state.monthlyFeesExcluidas[chave];
+  const m = state.members.find(m=>m.id===memberId);
+  logAtividade(`marcou mensalidade de ${monthLabel(mk)} de ${m ? m.name : memberId} como ${value ? 'não contabilizada no caixa (pagamento anterior)' : 'contabilizada normalmente no caixa'}`);
   render();
   await save();
 }
