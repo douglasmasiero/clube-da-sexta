@@ -402,7 +402,7 @@
   <div class="status" id="status">carregando…</div>
   <div class="status" id="usuario-logado" style="margin-top:4px; cursor:pointer; text-decoration:underline;" onclick="sair()"></div>
   <div class="status" id="modo-armazenamento" style="margin-top:2px;"></div>
-  <input type="file" id="comprovante-input" accept="image/*,.pdf" style="display:none;" onchange="handleComprovanteFile(event)">
+  <input type="file" id="comprovante-input" accept="image/*,.heic,.heif,.pdf,application/pdf" style="display:none;" onchange="handleComprovanteFile(event)">
 </header>
 
 <nav>
@@ -1093,10 +1093,24 @@ function renderFechamento(){
     return;
   }
   const c = computeMonth(mk);
+  const despesasDoMes = [
+    ...(state.monthlyExpenses[mk] ? [{ description: `Despesa do campo — ${monthLabel(mk)}`, amount: state.monthlyExpenses[mk] }] : []),
+    ...state.extraExpenses.filter(d=>d.date.slice(0,7)===mk).map(d=>({ description: d.description, amount: d.amount }))
+  ];
   el.innerHTML = `
     <div class="card">
-      <h2>Despesa do campo <small>${monthLabel(mk)}</small></h2>
-      <p class="muted">${state.monthlyExpenses[mk] ? `Valor lançado: ${fmtMoney(state.monthlyExpenses[mk])}` : 'Nenhum valor lançado ainda para este mês.'} Cadastre ou ajuste na aba <strong>Despesas</strong>.</p>
+      <h2>Despesas do clube <small>${monthLabel(mk)}</small></h2>
+      ${despesasDoMes.length ? `
+      <ul class="list">
+        ${despesasDoMes.map(d=>`
+          <li>
+            <span>${d.description}</span>
+            <span style="font-family:'JetBrains Mono',monospace; color:var(--red)">${fmtMoney(d.amount)}</span>
+          </li>
+        `).join('')}
+      </ul>
+      ` : '<p class="muted">Nenhuma despesa lançada ainda para este mês.</p>'}
+      <p class="muted" style="margin-top:10px;">Cadastre ou ajuste na aba <strong>Despesas</strong>.</p>
     </div>
     <div class="card">
       <h2>Fechamento de ${monthLabel(mk)}</h2>
@@ -1133,7 +1147,6 @@ function renderMensalidades(){
         ${ordenados.map(m=>{
           const chaveExp = mk+'|'+m.id;
           const paid = !!state.monthlyFees[chaveExp];
-          const excluida = !!state.monthlyFeesExcluidas[chaveExp];
           const valor = FEES[m.type];
           const proof = state.monthlyProofs[chaveExp];
           const aberto = !!expandedMensalidade[chaveExp];
@@ -1151,12 +1164,6 @@ function renderMensalidades(){
             <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:10px; flex-wrap:wrap;">
               <button class="action small ${paid ? '' : 'ghost'}" style="${paid ? 'background:#7BC67E; color:var(--ink);' : ''}" onclick="setMonthlyFee('${mk}','${m.id}',${!paid})">${paid ? '✓ Pago' : 'Marcar pago'}</button>
             </div>
-            ${paid ? `
-            <label class="check" style="margin-top:8px;">
-              <input type="checkbox" ${excluida?'checked':''} onchange="toggleExcluirDoCaixa('${mk}','${m.id}', this.checked)">
-              Pagamento anterior ao app — não somar nesse valor no caixa
-            </label>
-            ` : ''}
             <div style="display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap;">
               <button class="action small ghost" onclick="anexarComprovante('mensal','${chaveExp}')">📎 ${proof ? 'Trocar comprovante' : 'Anexar comprovante'}</button>
               ${proof ? `
@@ -1603,44 +1610,70 @@ window.setMonthlyFee = async function(mk, memberId, value){
   render();
   await save();
 }
-window.toggleExcluirDoCaixa = async function(mk, memberId, value){
-  const chave = mk+'|'+memberId;
-  if(value) state.monthlyFeesExcluidas[chave] = true;
-  else delete state.monthlyFeesExcluidas[chave];
-  const m = state.members.find(m=>m.id===memberId);
-  logAtividade(`marcou mensalidade de ${monthLabel(mk)} de ${m ? m.name : memberId} como ${value ? 'não contabilizada no caixa (pagamento anterior)' : 'contabilizada normalmente no caixa'}`);
-  render();
-  await save();
+const COMPROVANTES_BUCKET = 'comprovantes';
+
+function extensaoArquivo(nome, tipoMime){
+  const m = /\.([a-zA-Z0-9]+)$/.exec(nome||'');
+  if(m) return m[1].toLowerCase();
+  if(tipoMime==='application/pdf') return 'pdf';
+  if(tipoMime && tipoMime.startsWith('image/')) return tipoMime.split('/')[1] || 'jpg';
+  return 'dat';
 }
+
 window.anexarComprovante = function(tipo, chave){
   comprovanteTarget = { tipo, chave };
   document.getElementById('comprovante-input').click();
 }
-window.handleComprovanteFile = function(event){
+
+window.handleComprovanteFile = async function(event){
   const file = event.target.files[0];
   event.target.value = '';
   if(!file || !comprovanteTarget) return;
   const { tipo, chave } = comprovanteTarget;
   comprovanteTarget = null;
-  const alvo = tipo==='jogo' ? state.gameProofs : state.monthlyProofs;
 
-  const salvarDataUrl = async (dataUrl, nome) => {
-    if(dataUrl.length > 900000){
-      alert('Esse arquivo é muito grande. Tente uma foto mais leve ou um PDF menor.');
-      return;
+  if(!supabaseOk){
+    alert('Supabase não está configurado — não é possível enviar o comprovante agora.');
+    return;
+  }
+  if(file.size > 15*1024*1024){
+    alert('Esse arquivo é muito grande (máximo 15MB). Tente uma foto mais leve ou um PDF menor.');
+    return;
+  }
+
+  setStatus('enviando comprovante…');
+  try{
+    let blobFinal = file;
+    let extFinal = extensaoArquivo(file.name, file.type);
+
+    // Comprimir imagens (exceto PDF) pra economizar espaço — HEIC e formatos
+    // que o navegador não consegue decodificar em <img> caem no fallback
+    // (envia o arquivo original sem compressão).
+    if(file.type.startsWith('image/')){
+      try{
+        blobFinal = await comprimirImagem(file);
+        extFinal = 'jpg';
+      }catch(e){
+        blobFinal = file; // fallback: envia original (ex: HEIC não decodificável)
+      }
     }
-    alvo[chave] = { name: nome, dataUrl };
-    logAtividade(`anexou comprovante (${nome}) — ${tipo==='jogo' ? 'jogo' : 'mensalidade'}`);
-    render();
-    await save();
-  };
 
-  if(file.type.startsWith('image/')){
+    await salvarComprovanteNoStorage(tipo, chave, blobFinal, file.name, extFinal);
+  }catch(e){
+    setStatus('erro ao enviar comprovante');
+    alert('Não foi possível enviar o comprovante: ' + (e && e.message ? e.message : String(e)));
+  }
+}
+
+function comprimirImagem(file){
+  return new Promise((resolve, reject)=>{
     const img = new Image();
     const reader = new FileReader();
+    reader.onerror = reject;
     reader.onload = (e) => {
+      img.onerror = reject;
       img.onload = () => {
-        const maxDim = 900;
+        const maxDim = 1400;
         let w = img.width, h = img.height;
         if(w > maxDim || h > maxDim){
           const scale = maxDim / Math.max(w,h);
@@ -1649,30 +1682,125 @@ window.handleComprovanteFile = function(event){
         const canvas = document.createElement('canvas');
         canvas.width = w; canvas.height = h;
         canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-        salvarDataUrl(dataUrl, file.name);
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('falha ao comprimir')), 'image/jpeg', 0.75);
       };
       img.src = e.target.result;
     };
     reader.readAsDataURL(file);
-  } else {
-    const reader = new FileReader();
-    reader.onload = (e) => salvarDataUrl(e.target.result, file.name);
-    reader.readAsDataURL(file);
+  });
+}
+
+async function salvarComprovanteNoStorage(tipo, chave, blob, nomeOriginal, ext){
+  const alvo = tipo==='jogo' ? state.gameProofs : state.monthlyProofs;
+  const antigo = alvo[chave];
+  const chaveSanitizada = chave.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const path = `${tipo}/${chaveSanitizada}-${Date.now()}.${ext}`;
+
+  const { error: erroUpload } = await supabaseClient.storage
+    .from(COMPROVANTES_BUCKET)
+    .upload(path, blob, { upsert: true, contentType: blob.type || 'application/octet-stream' });
+  if(erroUpload) throw erroUpload;
+
+  alvo[chave] = { path, name: nomeOriginal };
+  logAtividade(`anexou comprovante (${nomeOriginal}) — ${tipo==='jogo' ? 'jogo' : 'mensalidade'}`);
+  render();
+  await save();
+  setStatus('comprovante enviado ✓');
+
+  // apaga o arquivo antigo do Storage, se estava trocando um comprovante
+  if(antigo && antigo.path && antigo.path !== path){
+    try{ await supabaseClient.storage.from(COMPROVANTES_BUCKET).remove([antigo.path]); }catch(e){}
   }
 }
-window.verComprovante = function(tipo, chave){
+
+window.verComprovante = async function(tipo, chave){
   const alvo = tipo==='jogo' ? state.gameProofs : state.monthlyProofs;
   const proof = alvo[chave];
-  if(!proof) return;
-  window.open(proof.dataUrl, '_blank');
+  if(!proof){ alert('Comprovante não encontrado.'); return; }
+
+  // Abre a aba JÁ na hora do clique (síncrono), senão o Safari do iPhone
+  // bloqueia a aba por não reconhecer como ação direta do usuário quando
+  // ela só abre depois de um await.
+  const novaAba = window.open('', '_blank');
+
+  // Comprovantes antigos (de antes dessa correção) ainda podem ter só o
+  // base64 salvo direto no banco, sem arquivo no Storage — nesse caso
+  // ainda dá pra abrir direto, só que sem o benefício do link real.
+  if(!proof.path && proof.dataUrl){
+    if(novaAba) novaAba.location.href = proof.dataUrl;
+    else window.open(proof.dataUrl, '_blank');
+    return;
+  }
+  if(!proof.path){
+    if(novaAba) novaAba.close();
+    alert('Esse comprovante está com um problema e precisa ser reenviado.');
+    return;
+  }
+
+  if(!supabaseOk){
+    if(novaAba) novaAba.close();
+    alert('Supabase não está configurado — não é possível abrir o comprovante agora.');
+    return;
+  }
+  try{
+    const { data, error } = await supabaseClient.storage
+      .from(COMPROVANTES_BUCKET)
+      .createSignedUrl(proof.path, 3600);
+    if(error || !data){
+      if(novaAba) novaAba.close();
+      alert('Não foi possível abrir o comprovante: ' + (error ? error.message : 'erro desconhecido'));
+      return;
+    }
+    if(novaAba) novaAba.location.href = data.signedUrl;
+    else window.open(data.signedUrl, '_blank');
+  }catch(e){
+    if(novaAba) novaAba.close();
+    alert('Erro ao abrir comprovante: ' + (e && e.message ? e.message : String(e)));
+  }
 }
+
 window.removerComprovante = async function(tipo, chave){
   const alvo = tipo==='jogo' ? state.gameProofs : state.monthlyProofs;
+  const proof = alvo[chave];
   delete alvo[chave];
   logAtividade(`removeu comprovante — ${tipo==='jogo' ? 'jogo' : 'mensalidade'}`);
   render();
   await save();
+  if(proof && proof.path && supabaseOk){
+    try{ await supabaseClient.storage.from(COMPROVANTES_BUCKET).remove([proof.path]); }catch(e){}
+  }
+}
+
+// Migra comprovantes antigos (base64 salvo direto no banco) pro Storage,
+// uma única vez, silenciosamente, na primeira vez que o app carregar
+// depois dessa atualização.
+async function migrarComprovantesAntigos(){
+  if(!supabaseOk) return;
+  const alvos = [
+    { mapa: state.monthlyProofs, tipo: 'mensal' },
+    { mapa: state.gameProofs, tipo: 'jogo' }
+  ];
+  let mudou = false;
+  for(const { mapa, tipo } of alvos){
+    for(const chave of Object.keys(mapa)){
+      const proof = mapa[chave];
+      if(proof && proof.dataUrl && !proof.path){
+        try{
+          const resp = await fetch(proof.dataUrl);
+          const blob = await resp.blob();
+          const ext = blob.type==='application/pdf' ? 'pdf' : 'jpg';
+          const chaveSanitizada = chave.replace(/[^a-zA-Z0-9_-]/g, '_');
+          const path = `${tipo}/${chaveSanitizada}-${Date.now()}.${ext}`;
+          const { error } = await supabaseClient.storage.from(COMPROVANTES_BUCKET).upload(path, blob, { upsert:true, contentType: blob.type });
+          if(!error){
+            mapa[chave] = { path, name: proof.name || 'comprovante' };
+            mudou = true;
+          }
+        }catch(e){ /* deixa esse específico como está, tenta de novo no próximo load */ }
+      }
+    }
+  }
+  if(mudou) await save();
 }
 
 async function addDespesa(){
@@ -1808,6 +1936,7 @@ async function entrarNoApp(){
   if(!state.saldoInicialDefinido){
     document.getElementById('saldo-inicial-overlay').style.display = 'flex';
   }
+  migrarComprovantesAntigos();
 }
 window.salvarSaldoInicial = async function(){
   const val = parseFloat(document.getElementById('saldo-inicial-valor').value) || 0;
